@@ -165,6 +165,19 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-800 to-indigo-900 py-12 px-4">
+      <div className="max-w-xl mx-auto text-center mb-6">
+        <h1 className="text-3xl font-bold text-white">Forex Conversion Rate</h1>
+        <p className="mt-2 text-lg text-indigo-200">
+          Get the latest currency exchange rate with{" "}
+          <a
+            href="https://finage.co.uk"
+            target="_blank"
+            className="text-indigo-100 underline"
+          >
+            Finage Forex Data API
+          </a>
+        </p>
+      </div>
       <div className="max-w-md mx-auto">
         {/* Exchange Rate Display */}
 
@@ -311,6 +324,23 @@ export default function Home() {
           </div>
         </div>
       </div>
+      <footer className="text-center text-sm pb-8 text-indigo-200 mt-6">
+        <p>
+          Forex Conversion is powered by Corsfix{" "}
+          <a href="https://corsfix.com" target="_blank" className="underline">
+            CORS proxy
+          </a>
+          <span className="mx-2">&bull;</span>
+          <a
+            href="https://github.com/corsfix/forex-conversion"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline"
+          >
+            Source code
+          </a>
+        </p>
+      </footer>
     </div>
   );
 }
