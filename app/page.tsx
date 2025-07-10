@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface ConversionResult {
   from: string;
@@ -9,6 +9,9 @@ interface ConversionResult {
   value: number;
   timestamp: number;
 }
+
+// Cache for exchange rates - stores both directions
+const exchangeRateCache: Record<string, number> = {};
 
 const currencies = [
   { code: "USD", name: "US Dollar", symbol: "$" },
@@ -25,27 +28,35 @@ export default function Home() {
   const [fromCurrency, setFromCurrency] = useState("GBP");
   const [toCurrency, setToCurrency] = useState("USD");
   const [amount, setAmount] = useState("");
-  const [result, setResult] = useState<ConversionResult | null>(null);
+  const [convertedAmount, setConvertedAmount] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [lastEditedField, setLastEditedField] = useState<"from" | "to">("from");
 
-  const formatCurrency = (value: number, currencyCode: string) => {
-    const currency = currencies.find((c) => c.code === currencyCode);
-    const symbol = currency?.symbol || currencyCode;
-
-    return (
-      new Intl.NumberFormat("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 4,
-      }).format(value) +
-      " " +
-      symbol
-    );
+  const getCachedRate = (from: string, to: string): number | null => {
+    const cacheKey = `${from}${to}`;
+    return exchangeRateCache[cacheKey] || null;
   };
 
-  const handleConvert = async () => {
-    if (!amount || isNaN(Number(amount))) {
-      setError("Please enter a valid amount");
+  const setCachedRate = (from: string, to: string, rate: number) => {
+    // Store the direct rate
+    exchangeRateCache[`${from}${to}`] = rate;
+
+    // Store the inverse rate for the opposite direction
+    exchangeRateCache[`${to}${from}`] = 1 / rate;
+  };
+
+  const handleConvert = async (
+    fromAmount: string,
+    reverse: boolean = false
+  ) => {
+    const numAmount = Number(fromAmount);
+    if (!fromAmount || isNaN(numAmount) || numAmount <= 0) {
+      if (reverse) {
+        setAmount("");
+      } else {
+        setConvertedAmount("");
+      }
       return;
     }
 
@@ -53,93 +64,160 @@ export default function Home() {
     setError("");
 
     try {
-      const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "{{FINAGE_API_KEY}}";
-      const response = await fetch(
-        `https://proxy.corsfix.com/?https://api.finage.co.uk/convert/forex/${fromCurrency}/${toCurrency}/${amount}?apikey=${API_KEY}`
-      );
+      const sourceCurrency = reverse ? toCurrency : fromCurrency;
+      const targetCurrency = reverse ? fromCurrency : toCurrency;
 
-      if (!response.ok) {
-        throw new Error("Failed to fetch conversion data");
+      let exchangeRate = getCachedRate(sourceCurrency, targetCurrency);
+
+      if (exchangeRate === null) {
+        // Need to fetch from API - always fetch rate for 1 unit to standardize
+        const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "{{FINAGE_API_KEY}}";
+        const response = await fetch(
+          `https://proxy.corsfix.com/?https://api.finage.co.uk/convert/forex/${sourceCurrency}/${targetCurrency}/1?apikey=${API_KEY}`
+        );
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch conversion data");
+        }
+
+        const data: ConversionResult = await response.json();
+        exchangeRate = data.value;
+        setCachedRate(sourceCurrency, targetCurrency, exchangeRate);
       }
 
-      const data: ConversionResult = await response.json();
-      setResult(data);
+      const convertedValue = numAmount * exchangeRate;
+
+      if (reverse) {
+        setAmount(convertedValue.toFixed(2));
+      } else {
+        setConvertedAmount(convertedValue.toFixed(2));
+      }
     } catch (err) {
       setError("Failed to convert currency. Please try again.");
       console.error("Conversion error:", err);
+      if (reverse) {
+        setAmount("");
+      } else {
+        setConvertedAmount("");
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
   const swapCurrencies = () => {
+    const tempCurrency = fromCurrency;
+    const tempAmount = amount;
+
     setFromCurrency(toCurrency);
-    setToCurrency(fromCurrency);
-    setResult(null);
+    setToCurrency(tempCurrency);
+    setAmount(convertedAmount);
+    setConvertedAmount(tempAmount);
+  };
+
+  const getCurrencyIcon = (currencyCode: string) => {
+    const icons: Record<string, { bg: string; text: string }> = {
+      EUR: { bg: "bg-blue-600", text: "EU" },
+      GBP: { bg: "bg-red-600", text: "GB" },
+      USD: { bg: "bg-green-600", text: "US" },
+      JPY: { bg: "bg-red-500", text: "JP" },
+      CAD: { bg: "bg-red-600", text: "CA" },
+      AUD: { bg: "bg-blue-500", text: "AU" },
+      CHF: { bg: "bg-red-600", text: "CH" },
+      CNY: { bg: "bg-red-600", text: "CN" },
+    };
+    return (
+      icons[currencyCode] || {
+        bg: "bg-gray-600",
+        text: currencyCode.slice(0, 2),
+      }
+    );
+  };
+
+  // Auto-convert when amount or currencies change
+  useEffect(() => {
+    if (lastEditedField === "from" && amount) {
+      const timeoutId = setTimeout(() => {
+        handleConvert(amount, false);
+      }, 300); // Debounce API calls
+      return () => clearTimeout(timeoutId);
+    }
+  }, [amount, fromCurrency, toCurrency, lastEditedField]);
+
+  useEffect(() => {
+    if (lastEditedField === "to" && convertedAmount) {
+      const timeoutId = setTimeout(() => {
+        handleConvert(convertedAmount, true);
+      }, 300); // Debounce API calls
+      return () => clearTimeout(timeoutId);
+    }
+  }, [convertedAmount, fromCurrency, toCurrency, lastEditedField]);
+
+  const handleAmountChange = (value: string) => {
+    setAmount(value);
+    setLastEditedField("from");
+  };
+
+  const handleConvertedAmountChange = (value: string) => {
+    setConvertedAmount(value);
+    setLastEditedField("to");
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-purple-50 py-12 px-4">
-      <div className="max-w-2xl mx-auto">
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">
-            Forex Converter
-          </h1>
-          <p className="text-gray-600">
-            Convert currencies with real-time exchange rates
-          </p>
-        </div>
+    <div className="min-h-screen bg-gradient-to-br from-indigo-800 to-indigo-900 py-12 px-4">
+      <div className="max-w-md mx-auto">
+        {/* Exchange Rate Display */}
 
-        <div className="bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
+        <div className="bg-white rounded-3xl shadow-xl p-8">
           <div className="space-y-6">
-            {/* Amount Input */}
+            {/* Amount Input with Currency Selector */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-lg font-medium text-gray-800 mb-4">
                 Amount
               </label>
-              <input
-                type="number"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="Enter amount"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none text-lg"
-              />
-            </div>
-
-            {/* Currency Selectors */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  From
-                </label>
-                <select
-                  value={fromCurrency}
-                  onChange={(e) => setFromCurrency(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
-                >
-                  {currencies.map((currency) => (
-                    <option key={currency.code} value={currency.code}>
-                      {currency.code} - {currency.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  To
-                </label>
-                <select
-                  value={toCurrency}
-                  onChange={(e) => setToCurrency(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
-                >
-                  {currencies.map((currency) => (
-                    <option key={currency.code} value={currency.code}>
-                      {currency.code} - {currency.name}
-                    </option>
-                  ))}
-                </select>
+              <div className="relative">
+                <input
+                  type="number"
+                  value={amount}
+                  onChange={(e) => handleAmountChange(e.target.value)}
+                  placeholder="1"
+                  className="w-full px-6 py-6 pr-32 border-2 border-gray-300 text-gray-800 rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-2xl font-semibold"
+                />
+                <div className="absolute right-4 top-1/2 transform -translate-y-1/2 flex items-center">
+                  <div
+                    className={`w-8 h-8 ${
+                      getCurrencyIcon(fromCurrency).bg
+                    } rounded-full flex items-center justify-center mr-3`}
+                  >
+                    <span className="text-white text-xs font-bold">
+                      {getCurrencyIcon(fromCurrency).text}
+                    </span>
+                  </div>
+                  <select
+                    value={fromCurrency}
+                    onChange={(e) => setFromCurrency(e.target.value)}
+                    className="bg-transparent text-xl font-semibold text-gray-800 border-none outline-none appearance-none cursor-pointer"
+                  >
+                    {currencies.map((currency) => (
+                      <option key={currency.code} value={currency.code}>
+                        {currency.code}
+                      </option>
+                    ))}
+                  </select>
+                  <svg
+                    className="w-4 h-4 ml-1 text-gray-500"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 9l-7 7-7-7"
+                    />
+                  </svg>
+                </div>
               </div>
             </div>
 
@@ -147,11 +225,11 @@ export default function Home() {
             <div className="flex justify-center">
               <button
                 onClick={swapCurrencies}
-                className="p-2 rounded-full bg-purple-100 hover:bg-purple-200 transition-colors"
+                className="w-12 h-12 bg-indigo-100 hover:bg-indigo-200 rounded-full flex items-center justify-center transition-colors"
                 title="Swap currencies"
               >
                 <svg
-                  className="w-6 h-6 text-purple-600"
+                  className="w-6 h-6 text-indigo-600"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -166,42 +244,68 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Convert Button */}
-            <button
-              onClick={handleConvert}
-              disabled={isLoading || !amount}
-              className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white font-semibold py-3 px-6 rounded-lg transition-colors disabled:cursor-not-allowed"
-            >
-              {isLoading ? "Converting..." : "Convert"}
-            </button>
+            {/* Converted Amount Display */}
+            <div>
+              <label className="block text-lg font-medium text-gray-800 mb-4">
+                Converted to
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  value={convertedAmount}
+                  onChange={(e) => handleConvertedAmountChange(e.target.value)}
+                  placeholder="0"
+                  className="w-full px-6 py-6 pr-32 border-2 border-gray-300 text-gray-800 rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-2xl font-semibold"
+                />
+                <div className="absolute right-4 top-1/2 transform -translate-y-1/2 flex items-center">
+                  <div
+                    className={`w-8 h-8 ${
+                      getCurrencyIcon(toCurrency).bg
+                    } rounded-full flex items-center justify-center mr-3`}
+                  >
+                    <span className="text-white text-xs font-bold">
+                      {getCurrencyIcon(toCurrency).text}
+                    </span>
+                  </div>
+                  <select
+                    value={toCurrency}
+                    onChange={(e) => setToCurrency(e.target.value)}
+                    className="bg-transparent text-xl font-semibold text-gray-800 border-none outline-none appearance-none cursor-pointer"
+                  >
+                    {currencies.map((currency) => (
+                      <option key={currency.code} value={currency.code}>
+                        {currency.code}
+                      </option>
+                    ))}
+                  </select>
+                  <svg
+                    className="w-4 h-4 ml-1 text-gray-500"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 9l-7 7-7-7"
+                    />
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            {/* Loading indicator */}
+            {isLoading && (
+              <div className="flex justify-center">
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
+              </div>
+            )}
 
             {/* Error Message */}
             {error && (
               <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
                 <p className="text-red-600 text-sm">{error}</p>
-              </div>
-            )}
-
-            {/* Result */}
-            {result && (
-              <div className="p-6 bg-purple-50 border border-purple-200 rounded-lg">
-                <div className="text-center">
-                  <p className="text-gray-600 mb-2">Conversion Result</p>
-                  <div className="text-2xl font-bold text-gray-900 mb-4">
-                    {formatCurrency(result.amount, result.from)} ={" "}
-                    {formatCurrency(result.value, result.to)}
-                  </div>
-                  <div className="text-sm text-gray-500">
-                    <p>
-                      Exchange Rate: 1 {result.from} ={" "}
-                      {(result.value / result.amount).toFixed(4)} {result.to}
-                    </p>
-                    <p>
-                      Last Updated:{" "}
-                      {new Date(result.timestamp).toLocaleString()}
-                    </p>
-                  </div>
-                </div>
               </div>
             )}
           </div>
